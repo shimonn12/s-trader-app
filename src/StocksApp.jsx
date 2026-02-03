@@ -70,6 +70,7 @@ import AuthSystem from './SimpleAuthSystem.jsx';
 import WatchlistView from './WatchlistView.jsx';
 import GoalsView from './GoalsView.jsx';
 import AnalyticsPerformanceSection from './AnalyticsPerformanceSection.jsx';
+import { saveUserData, loadUserData } from './firebaseConfig';
 
 // --- Dropdown Component ---
 const DropdownComponent = ({ currency, showPercentage, setShowPercentage }) => {
@@ -2388,7 +2389,7 @@ export default function StocksApp({ username: propUsername, onLogout: propOnLogo
     setShowLogoutConfirm(false);
   };
 
-  // Load user data when component mounts or propUsername changes
+  // Load user data when component mounts or propUsername changes (HYBRID: LocalStorage + Firebase)
   useEffect(() => {
     if (!propUsername) {
       setHydrated(true);
@@ -2397,43 +2398,39 @@ export default function StocksApp({ username: propUsername, onLogout: propOnLogo
 
     setHydrated(false);
     const uid = propUsername.toLowerCase();
-    const STORAGE_KEY = `s_trader:${uid}:stocks:data`;
 
-    try {
-      const stored = localStorage.getItem(STORAGE_KEY);
-      if (stored) {
-        const data = JSON.parse(stored);
+    // Load data using hybrid storage (LocalStorage + Firestore)
+    loadUserData(propUsername, 'stocks').then(data => {
+      if (data) {
         setTrades(Array.isArray(data.trades) ? data.trades : []);
         if (data.settings) setSettings(data.settings);
         if (data.startingCapital) setStartingCapital(data.startingCapital);
         if (data.goals) setGoals(data.goals);
         if (data.lang) setLang(data.lang);
       }
-    } catch (error) {
+      setHydrated(true);
+    }).catch(error => {
       console.error('Failed to load stocks data:', error);
-    }
-
-    setHydrated(true);
+      setHydrated(true);
+    });
   }, [propUsername]);
 
-  // Auto-save on change (User specific) - only after hydration
+  // Auto-save on change (User specific) - only after hydration (HYBRID: LocalStorage + Firebase)
   useEffect(() => {
     if (!user || !hydrated) return;
 
-    const uid = user.toLowerCase();
-    const STORAGE_KEY = `s_trader:${uid}:stocks:data`;
+    const dataToSave = {
+      trades,
+      settings,
+      startingCapital,
+      goals,
+      lang
+    };
 
-    try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify({
-        trades,
-        settings,
-        startingCapital,
-        goals,
-        lang
-      }));
-    } catch (error) {
+    // Save using hybrid storage (LocalStorage + Firestore)
+    saveUserData(user, 'stocks', dataToSave).catch(error => {
       console.error('Failed to save stocks data:', error);
-    }
+    });
   }, [trades, settings, startingCapital, goals, user, hydrated, lang]);
 
   // Initial Load (Check if user was logged in is tricky without session, so we force login)

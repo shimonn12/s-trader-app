@@ -1,0 +1,239 @@
+// Firebase Configuration and Services
+import { initializeApp } from 'firebase/app';
+import { getAuth, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
+import {
+    getFirestore,
+    collection,
+    doc,
+    setDoc,
+    getDoc,
+    getDocs,
+    deleteDoc,
+    enableIndexedDbPersistence,
+    onSnapshot,
+    query,
+    where,
+    serverTimestamp
+} from 'firebase/firestore';
+
+// Firebase Configuration
+const firebaseConfig = {
+    apiKey: "AIzaSyDqof4J3yzooIgxod5yahKI0ubLOAeChtI",
+    authDomain: "fir-trader-ceb20.firebaseapp.com",
+    projectId: "fir-trader-ceb20",
+    storageBucket: "fir-trader-ceb20.firebasestorage.app",
+    messagingSenderId: "1035753527951",
+    appId: "1:1035753527951:web:a93c6c8259910b0dd2eefa",
+    measurementId: "G-1ETXWEZCW7"
+};
+
+// Initialize Firebase
+const app = initializeApp(firebaseConfig);
+const auth = getAuth(app);
+const db = getFirestore(app);
+
+// Enable Offline Persistence
+try {
+    enableIndexedDbPersistence(db).catch((err) => {
+        if (err.code === 'failed-precondition') {
+            console.warn('⚠️ Multiple tabs open, persistence can only be enabled in one tab at a time.');
+        } else if (err.code === 'unimplemented') {
+            console.warn('⚠️ The current browser does not support offline persistence.');
+        }
+    });
+} catch (error) {
+    console.error('Error enabling persistence:', error);
+}
+
+/**
+ * =========================
+ * HYBRID STORAGE SYSTEM
+ * =========================
+ * This system saves data BOTH locally (LocalStorage) and remotely (Firestore)
+ * - LocalStorage = Fast, works offline
+ * - Firestore = Cloud backup, syncs across devices
+ */
+
+// Get or create anonymous user
+export const initializeAuth = async () => {
+    return new Promise((resolve, reject) => {
+        const unsubscribe = onAuthStateChanged(auth, async (user) => {
+            unsubscribe();
+            if (user) {
+                resolve(user);
+            } else {
+                try {
+                    const result = await signInAnonymously(auth);
+                    resolve(result.user);
+                } catch (error) {
+                    console.error('Error signing in anonymously:', error);
+                    reject(error);
+                }
+            }
+        });
+    });
+};
+
+// Map S-Trader username to Firebase UID
+const getUserMapping = () => {
+    const mapping = localStorage.getItem('s_trader:user_mapping');
+    return mapping ? JSON.parse(mapping) : {};
+};
+
+const setUserMapping = (username, firebaseUid) => {
+    const mapping = getUserMapping();
+    mapping[username.toLowerCase()] = firebaseUid;
+    localStorage.setItem('s_trader:user_mapping', JSON.stringify(mapping));
+};
+
+export const getFirebaseUidForUser = async (username) => {
+    const mapping = getUserMapping();
+    const uid = mapping[username.toLowerCase()];
+
+    if (uid) {
+        return uid;
+    }
+
+    // If no mapping exists, create one with anonymous auth
+    const firebaseUser = await initializeAuth();
+    setUserMapping(username, firebaseUser.uid);
+    return firebaseUser.uid;
+};
+
+/**
+ * =========================
+ * HYBRID SAVE FUNCTION
+ * =========================
+ * Saves to LocalStorage (immediate) + Firestore (background)
+ */
+export const saveUserData = async (username, journalType, data) => {
+    const uid = username.toLowerCase();
+    const localKey = `s_trader:${uid}:${journalType}:data`;
+
+    try {
+        // 1. Save to LocalStorage (IMMEDIATE - for speed)
+        localStorage.setItem(localKey, JSON.stringify(data));
+
+        // 2. Save to Firestore (BACKGROUND - for cloud backup)
+        const firebaseUid = await getFirebaseUidForUser(username);
+        const docRef = doc(db, 'users', firebaseUid, journalType, 'data');
+
+        await setDoc(docRef, {
+            ...data,
+            lastUpdated: serverTimestamp(),
+            username: username
+        }, { merge: true });
+
+        console.log(`✅ Data saved: LocalStorage + Firestore (${journalType})`);
+        return { success: true };
+    } catch (error) {
+        console.error('❌ Error saving to Firestore:', error);
+        // Data is still saved locally, so app continues to work
+        return { success: false, error: error.message };
+    }
+};
+
+/**
+ * =========================
+ * HYBRID LOAD FUNCTION
+ * =========================
+ * Loads from LocalStorage (fast) + syncs from Firestore (if online)
+ */
+export const loadUserData = async (username, journalType) => {
+    const uid = username.toLowerCase();
+    const localKey = `s_trader:${uid}:${journalType}:data`;
+
+    try {
+        // 1. Load from LocalStorage (IMMEDIATE)
+        const localData = localStorage.getItem(localKey);
+        let data = localData ? JSON.parse(localData) : null;
+
+        // 2. Try to sync from Firestore (BACKGROUND)
+        try {
+            const firebaseUid = await getFirebaseUidForUser(username);
+            const docRef = doc(db, 'users', firebaseUid, journalType, 'data');
+            const docSnap = await getDoc(docRef);
+
+            if (docSnap.exists()) {
+                const firestoreData = docSnap.data();
+
+                // Compare timestamps to get the most recent data
+                const localTimestamp = data?.lastUpdated?.seconds || 0;
+                const firestoreTimestamp = firestoreData?.lastUpdated?.seconds || 0;
+
+                if (firestoreTimestamp > localTimestamp) {
+                    // Firestore has newer data - use it
+                    data = firestoreData;
+                    localStorage.setItem(localKey, JSON.stringify(data));
+                    console.log(`🔄 Synced from Firestore (${journalType})`);
+                } else {
+                    console.log(`✅ LocalStorage is up to date (${journalType})`);
+                }
+            } else {
+                // No Firestore data yet - save local data to cloud
+                if (data) {
+                    await saveUserData(username, journalType, data);
+                    console.log(`☁️ Uploaded local data to Firestore (${journalType})`);
+                }
+            }
+        } catch (syncError) {
+            console.warn('⚠️ Firestore sync failed, using local data:', syncError.message);
+            // Continue with local data
+        }
+
+        return data;
+    } catch (error) {
+        console.error('❌ Error loading data:', error);
+        return null;
+    }
+};
+
+/**
+ * =========================
+ * REAL-TIME SYNC (Optional)
+ * =========================
+ * Listen to Firestore changes in real-time
+ */
+export const subscribeToUserData = (username, journalType, callback) => {
+    getFirebaseUidForUser(username).then(firebaseUid => {
+        const docRef = doc(db, 'users', firebaseUid, journalType, 'data');
+
+        return onSnapshot(docRef, (docSnap) => {
+            if (docSnap.exists()) {
+                const data = docSnap.data();
+                callback(data);
+                console.log(`🔔 Real-time update received (${journalType})`);
+            }
+        }, (error) => {
+            console.error('Real-time sync error:', error);
+        });
+    });
+};
+
+/**
+ * =========================
+ * DELETE USER DATA
+ * =========================
+ */
+export const deleteUserData = async (username, journalType) => {
+    const uid = username.toLowerCase();
+    const localKey = `s_trader:${uid}:${journalType}:data`;
+
+    try {
+        // Delete from LocalStorage
+        localStorage.removeItem(localKey);
+
+        // Delete from Firestore
+        const firebaseUid = await getFirebaseUidForUser(username);
+        const docRef = doc(db, 'users', firebaseUid, journalType, 'data');
+        await deleteDoc(docRef);
+
+        console.log(`🗑️ Data deleted: LocalStorage + Firestore (${journalType})`);
+        return { success: true };
+    } catch (error) {
+        console.error('Error deleting data:', error);
+        return { success: false, error: error.message };
+    }
+};
+
+export { auth, db };

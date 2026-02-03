@@ -12,6 +12,7 @@
     "dependencies": {
         "@emailjs/browser": "^4.4.1",
         "@tailwindcss/postcss": "^4.0.0",
+        "firebase": "^12.8.0",
         "html2canvas": "^1.4.1",
         "lucide-react": "^0.562.0",
         "react": "^19.0.0",

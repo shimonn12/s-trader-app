@@ -42,6 +42,7 @@ import {
 } from "lucide-react";
 import AnalyticsView from "./AnalyticsView";
 import GoalsView from "./GoalsView";
+import { saveUserData, loadUserData } from "../firebaseConfig";
 
 /** =========================
  * CONST / HELPERS
@@ -2830,7 +2831,7 @@ export default function FuturesApp({ username: propUsername, onLogout: propOnLog
         }
     }, [propUsername]);
 
-    /** ===== Persistence (FULL) ===== */
+    /** ===== Persistence (HYBRID: LocalStorage + Firebase) ===== */
     useEffect(() => {
         if (!user) {
             setHydrated(true);
@@ -2839,43 +2840,39 @@ export default function FuturesApp({ username: propUsername, onLogout: propOnLog
 
         setHydrated(false);
         const uid = user.toLowerCase();
-        const STORAGE_KEY = `s_trader:${uid}:futures:data`;
 
-        try {
-            const stored = localStorage.getItem(STORAGE_KEY);
-            if (stored) {
-                const data = JSON.parse(stored);
+        // Load data using hybrid storage (LocalStorage + Firestore)
+        loadUserData(user, 'futures').then(data => {
+            if (data) {
                 setTrades(Array.isArray(data.trades) ? data.trades : []);
                 setSettings(data.settings || { currency: "$", theme: "dark", fontSize: 14 });
                 setStartingCapital(Number.isFinite(data.startingCapital) ? data.startingCapital : 25000);
                 setGoals(data.goals || { daily: 1000, weekly: 5000, monthly: 20000, yearly: 200000 });
                 if (data.lang) setLang(data.lang);
             }
-        } catch (error) {
+            setHydrated(true);
+        }).catch(error => {
             console.error('Failed to load futures data:', error);
-        }
-
-        setHydrated(true);
+            setHydrated(true);
+        });
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [user]);
 
     useEffect(() => {
         if (!user || !hydrated) return;
 
-        const uid = user.toLowerCase();
-        const STORAGE_KEY = `s_trader:${uid}:futures:data`;
+        const dataToSave = {
+            trades,
+            settings,
+            startingCapital,
+            goals,
+            lang,
+        };
 
-        try {
-            localStorage.setItem(STORAGE_KEY, JSON.stringify({
-                trades,
-                settings,
-                startingCapital,
-                goals,
-                lang,
-            }));
-        } catch (error) {
+        // Save using hybrid storage (LocalStorage + Firestore)
+        saveUserData(user, 'futures', dataToSave).catch(error => {
             console.error('Failed to save futures data:', error);
-        }
+        });
     }, [trades, settings, startingCapital, goals, user, hydrated, lang]);
 
     const handleLogin = (username) => setUser(username);
