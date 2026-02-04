@@ -2,12 +2,12 @@
     "name": "יומן מסחר",
     "short_name": "יומן מסחר",
     "description": "Trading journal and analytics for stocks and futures",
-    "start_url": "/s-trader-app/",
+    "start_url": "./index.html",
     "display": "standalone",
     "background_color": "#0b1527",
     "theme_color": "#0b1527",
     "lang": "he",
-    "scope": "/s-trader-app/",
+    "scope": "./",
     "orientation": "portrait",
     "icons": [
         {
