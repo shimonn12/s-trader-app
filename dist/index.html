@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+
+<head>
+  <meta charset="UTF-8" />
+  <!-- App Icons -->
+  <link rel="icon" type="image/png" href="./assets/icon-qLrHeGSF-qLrHeGSF-qLrHeGSF-qLrHeGSF-qLrHeGSF-qLrHeGSF.png" />
+  <link rel="apple-touch-icon" href="./assets/icon-qLrHeGSF-qLrHeGSF-qLrHeGSF-qLrHeGSF-qLrHeGSF-qLrHeGSF.png" />
+  <meta name="viewport"
+    content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+  <meta name="theme-color" content="#0b1527" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="יומן מסחר" />
+  <meta name="format-detection" content="telephone=no" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <title>יומן מסחר</title>
+  <style>
+    /* Splash Screen Styles */
+    #initial-splash {
+      position: fixed;
+      inset: 0;
+      background-color: #0b1527;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      z-index: 99999;
+      transition: opacity 0.5s ease-out;
+    }
+
+    .splash-container {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      width: 100%;
+      height: 100%;
+    }
+
+    #initial-splash img {
+      max-width: 80%;
+      max-height: 80vh;
+      -o-object-fit: contain;
+      object-fit: contain;
+    }
+
+    #initial-splash.fade-out {
+      opacity: 0;
+      pointer-events: none;
+    }
+  </style>
+  <link rel="manifest" href="./assets/manifest-CU8xDoi9.webmanifest">
+<link rel="manifest" href="./assets/manifest-CU8xDoi9.webmanifest"><script id="vite-plugin-pwa:register-sw" src="./registerSW.js"></script>  
+<link rel="manifest" href="./assets/manifest-CU8xDoi9.webmanifest"><script id="vite-plugin-pwa:register-sw" src="./registerSW.js"></script>  
+<link rel="manifest" href="./assets/manifest-CU8xDoi9.webmanifest"><script id="vite-plugin-pwa:register-sw" src="./registerSW.js"></script>  
+<link rel="manifest" href="./assets/manifest-CU8xDoi9.webmanifest"><script id="vite-plugin-pwa:register-sw" src="./registerSW.js"></script>  <script type="module" crossorigin src="./assets/index-wPPjaZ3E.js"></script>
+  <link rel="stylesheet" crossorigin href="./assets/index-PkhEe-pM.css">
+<link rel="manifest" href="./manifest.webmanifest"><script id="vite-plugin-pwa:register-sw" src="./registerSW.js"></script></head>
+
+<body>
+  <!-- Initial Static Splash -->
+  <div id="initial-splash">
+    <div class="splash-container">
+      <img src="./assets/logo_new-D23iANgE-D23iANgE-D23iANgE-D23iANgE-D23iANgE-D23iANgE.png" alt="יומן מסחר"
+        onerror="this.style.display='none'; this.parentElement.innerHTML='<h1 style=\'color:white;font-size:40px;\'>יומן מסחר</h1>'">
+    </div>
+  </div>
+
+  <div id="root"></div>
+</body>
+
+</html>
