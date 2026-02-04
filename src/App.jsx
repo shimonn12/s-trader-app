@@ -243,14 +243,8 @@ const CentralAuth = ({ onLogin, lang: initialLang = 'he' }) => {
     const handleLogin = async (e) => {
         e.preventDefault();
         setError('');
-        const users = JSON.parse(localStorage.getItem('smartJournal_users') || '{}');
 
-        if (!users[formData.username]) {
-            setError(t('userNotFound'));
-            return;
-        }
-
-        if (!formData.password) {
+        if (!formData.username || !formData.password) {
             setError(t('fillAllFields'));
             return;
         }
@@ -260,19 +254,20 @@ const CentralAuth = ({ onLogin, lang: initialLang = 'he' }) => {
             return;
         }
 
-        const user = users[formData.username];
+        const users = JSON.parse(localStorage.getItem('smartJournal_users') || '{}');
+        let localUser = users[formData.username];
         let cloudUser = null;
 
-        // Try to load from cloud if locally not consistent or for double check
         setIsLoading(true);
         try {
+            // Check cloud first if local is missing or just for sync
             cloudUser = await loadUserAccount(formData.username);
         } catch (e) {
             console.warn("Cloud auth check failed", e);
         }
         setIsLoading(false);
 
-        const activeUser = cloudUser || user;
+        const activeUser = cloudUser || localUser;
 
         if (!activeUser) {
             setError(t('userNotFound'));
@@ -285,10 +280,11 @@ const CentralAuth = ({ onLogin, lang: initialLang = 'he' }) => {
             return;
         }
 
-        // Sync to local if found on cloud but not local
-        if (cloudUser && !users[formData.username]) {
+        // AUTO SYNC: If cloud exists but local doesn't (New device), sync it!
+        if (cloudUser && !localUser) {
             users[formData.username] = cloudUser;
             localStorage.setItem('smartJournal_users', JSON.stringify(users));
+            console.log("✈️ Account synced from cloud to this device!");
         }
 
         if (rememberMe) {
@@ -299,6 +295,7 @@ const CentralAuth = ({ onLogin, lang: initialLang = 'he' }) => {
         } else {
             localStorage.removeItem('smartJournal_creds');
         }
+
         onLogin(formData.username, selectedJournal);
     };
 
@@ -328,7 +325,18 @@ const CentralAuth = ({ onLogin, lang: initialLang = 'he' }) => {
         }
 
         const users = JSON.parse(localStorage.getItem('smartJournal_users') || '{}');
-        if (users[formData.username]) {
+
+        setIsLoading(true);
+        // CRITICAL: Check cloud during registration to prevent duplicate usernames across devices!
+        let cloudCheck = null;
+        try {
+            cloudCheck = await loadUserAccount(formData.username);
+        } catch (e) {
+            console.warn("Cloud check during register failed", e);
+        }
+
+        if (users[formData.username] || cloudCheck) {
+            setIsLoading(false);
             setError(t('userExists'));
             return;
         }
@@ -346,8 +354,7 @@ const CentralAuth = ({ onLogin, lang: initialLang = 'he' }) => {
         users[formData.username] = newUser;
         localStorage.setItem('smartJournal_users', JSON.stringify(users));
 
-        // Sync to cloud
-        setIsLoading(true);
+        // Sync to cloud IMMEDIATELY
         saveUserAccount(formData.username, newUser).finally(() => {
             setIsLoading(false);
         });

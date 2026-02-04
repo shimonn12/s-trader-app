@@ -70,7 +70,7 @@ import AuthSystem from './SimpleAuthSystem.jsx';
 import WatchlistView from './WatchlistView.jsx';
 import GoalsView from './GoalsView.jsx';
 import AnalyticsPerformanceSection from './AnalyticsPerformanceSection.jsx';
-import { saveUserData, loadUserData } from './firebaseConfig';
+import { saveUserData, loadUserData, subscribeToUserData } from './firebaseConfig';
 
 // --- Dropdown Component ---
 const DropdownComponent = ({ currency, showPercentage, setShowPercentage }) => {
@@ -2397,9 +2397,8 @@ export default function StocksApp({ username: propUsername, onLogout: propOnLogo
     }
 
     setHydrated(false);
-    const uid = propUsername.toLowerCase();
 
-    // Load data using hybrid storage (LocalStorage + Firestore)
+    // 1. Initial Load (Hybrid: Local + Cloud)
     loadUserData(propUsername, 'stocks').then(data => {
       if (data) {
         setTrades(Array.isArray(data.trades) ? data.trades : []);
@@ -2413,6 +2412,19 @@ export default function StocksApp({ username: propUsername, onLogout: propOnLogo
       console.error('Failed to load stocks data:', error);
       setHydrated(true);
     });
+
+    // 2. Real-time Subscription (Background sync from other devices)
+    const unsubscribe = subscribeToUserData(propUsername, 'stocks', (dataToAdd) => {
+      if (dataToAdd && hydrated) {
+        setTrades(Array.isArray(dataToAdd.trades) ? dataToAdd.trades : []);
+        if (dataToAdd.settings) setSettings(dataToAdd.settings);
+        if (dataToAdd.startingCapital) setStartingCapital(dataToAdd.startingCapital);
+        if (dataToAdd.goals) setGoals(dataToAdd.goals);
+        if (dataToAdd.lang) setLang(dataToAdd.lang);
+      }
+    });
+
+    return () => unsubscribe();
   }, [propUsername]);
 
   // Auto-save on change (User specific) - only after hydration (HYBRID: LocalStorage + Firebase)

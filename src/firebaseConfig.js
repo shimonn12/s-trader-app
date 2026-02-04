@@ -74,18 +74,6 @@ export const initializeAuth = async () => {
     });
 };
 
-// Map S-Trader username to Firebase UID
-const getUserMapping = () => {
-    const mapping = localStorage.getItem('s_trader:user_mapping');
-    return mapping ? JSON.parse(mapping) : {};
-};
-
-const setUserMapping = (username, firebaseUid) => {
-    const mapping = getUserMapping();
-    mapping[username.toLowerCase()] = firebaseUid;
-    localStorage.setItem('s_trader:user_mapping', JSON.stringify(mapping));
-};
-
 /**
  * =========================
  * CROSS-DEVICE SYNC LOGIC
@@ -94,9 +82,7 @@ const setUserMapping = (username, firebaseUid) => {
  */
 export const getFirebaseUidForUser = async (username) => {
     // Ensure the user is signed in anonymously before proceeding
-    // This guarantees that request.auth will NOT be null in Firestore rules
     await initializeAuth();
-
     // We use the normalized username as the key in Firestore.
     return username.toLowerCase().trim();
 };
@@ -179,7 +165,6 @@ export const loadUserData = async (username, journalType) => {
             }
         } catch (syncError) {
             console.warn('⚠️ Firestore sync failed, using local data:', syncError.message);
-            // Continue with local data
         }
 
         return data;
@@ -191,56 +176,46 @@ export const loadUserData = async (username, journalType) => {
 
 /**
  * =========================
- * REAL-TIME SYNC (Optional)
+ * REAL-TIME SYNC
  * =========================
  * Listen to Firestore changes in real-time
  */
 export const subscribeToUserData = (username, journalType, callback) => {
+    let unsubscribe = () => { };
+
     getFirebaseUidForUser(username).then(firebaseUid => {
         const docRef = doc(db, 'users', firebaseUid, journalType, 'data');
 
-        return onSnapshot(docRef, (docSnap) => {
+        unsubscribe = onSnapshot(docRef, (docSnap) => {
             if (docSnap.exists()) {
                 const data = docSnap.data();
-                callback(data);
-                console.log(`🔔 Real-time update received (${journalType})`);
+                // Check if cloud data is newer than what we have
+                const uid = username.toLowerCase();
+                const localKey = `s_trader:${uid}:${journalType}:data`;
+                const localData = localStorage.getItem(localKey);
+                const localTimestamp = localData ? JSON.parse(localData)?.lastUpdated?.seconds || 0 : 0;
+                const firestoreTimestamp = data?.lastUpdated?.seconds || 0;
+
+                if (firestoreTimestamp > localTimestamp) {
+                    localStorage.setItem(localKey, JSON.stringify(data));
+                    callback(data);
+                    console.log(`🔔 Real-time sync updated (${journalType})`);
+                }
             }
         }, (error) => {
             console.error('Real-time sync error:', error);
         });
     });
+
+    return () => unsubscribe();
 };
 
 /**
  * =========================
- * DELETE USER DATA
- * =========================
- */
-export const deleteUserData = async (username, journalType) => {
-    const uid = username.toLowerCase();
-    const localKey = `s_trader:${uid}:${journalType}:data`;
-
-    try {
-        // Delete from LocalStorage
-        localStorage.removeItem(localKey);
-
-        // Delete from Firestore
-        const firebaseUid = await getFirebaseUidForUser(username);
-        const docRef = doc(db, 'users', firebaseUid, journalType, 'data');
-        await deleteDoc(docRef);
-
-        console.log(`🗑️ Data deleted: LocalStorage + Firestore (${journalType})`);
-        return { success: true };
-    } catch (error) {
-        console.error('Error deleting data:', error);
-        return { success: false, error: error.message };
-    }
-};
- * =========================
  * USER ACCOUNT SYNC
-    * =========================
- * Saves / Loads the account itself(username, password, email)
-    */
+ * =========================
+ * Saves / Loads the account itself (username, password, email)
+ */
 export const saveUserAccount = async (username, accountData) => {
     try {
         const firebaseUid = await getFirebaseUidForUser(username);

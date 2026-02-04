@@ -42,7 +42,7 @@ import {
 } from "lucide-react";
 import AnalyticsView from "./AnalyticsView";
 import GoalsView from "./GoalsView";
-import { saveUserData, loadUserData } from "../firebaseConfig";
+import { saveUserData, loadUserData, subscribeToUserData } from "../firebaseConfig";
 
 /** =========================
  * CONST / HELPERS
@@ -2839,9 +2839,8 @@ export default function FuturesApp({ username: propUsername, onLogout: propOnLog
         }
 
         setHydrated(false);
-        const uid = user.toLowerCase();
 
-        // Load data using hybrid storage (LocalStorage + Firestore)
+        // 1. Initial Load (Hybrid: Local + Cloud)
         loadUserData(user, 'futures').then(data => {
             if (data) {
                 setTrades(Array.isArray(data.trades) ? data.trades : []);
@@ -2855,6 +2854,20 @@ export default function FuturesApp({ username: propUsername, onLogout: propOnLog
             console.error('Failed to load futures data:', error);
             setHydrated(true);
         });
+
+        // 2. Real-time Subscription (Background sync from other devices)
+        const unsubscribe = subscribeToUserData(user, 'futures', (dataToAdd) => {
+            if (dataToAdd && hydrated) {
+                // Only update if cloud is newer (timestamp logic is inside subscribe)
+                setTrades(Array.isArray(dataToAdd.trades) ? dataToAdd.trades : []);
+                setSettings(dataToAdd.settings || { currency: "$", theme: "dark", fontSize: 14 });
+                setStartingCapital(Number.isFinite(dataToAdd.startingCapital) ? dataToAdd.startingCapital : 25000);
+                setGoals(dataToAdd.goals || { daily: 1000, weekly: 5000, monthly: 20000, yearly: 200000 });
+                if (dataToAdd.lang) setLang(dataToAdd.lang);
+            }
+        });
+
+        return () => unsubscribe();
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [user]);
 
