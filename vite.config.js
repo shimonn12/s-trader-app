@@ -3,7 +3,11 @@ import react from '@vitejs/plugin-react'
 import { VitePWA } from 'vite-plugin-pwa'
 
 export default defineConfig({
-    base: './',
+    base: '/s-trader-app/',
+    build: {
+        outDir: 'docs',
+        emptyOutDir: true
+    },
     plugins: [
         react(),
         VitePWA({
@@ -37,8 +41,8 @@ export default defineConfig({
                 background_color: '#0b1527',
                 display: 'standalone',
                 orientation: 'portrait',
-                scope: '/',
-                start_url: '/',
+                scope: '/s-trader-app/',
+                start_url: '/s-trader-app/',
                 icons: [
                     {
                         src: 'icon.png',
