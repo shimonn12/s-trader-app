@@ -4,10 +4,6 @@ import { VitePWA } from 'vite-plugin-pwa'
 
 export default defineConfig({
     base: '/s-trader-app/',
-    build: {
-        outDir: 'docs',
-        emptyOutDir: true
-    },
     plugins: [
         react(),
         VitePWA({
@@ -64,4 +60,10 @@ export default defineConfig({
             }
         })
     ],
+    build: {
+        outDir: 'dist',
+        assetsDir: 'assets',
+        emptyOutDir: true,
+        sourcemap: false
+    }
 })
