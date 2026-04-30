@@ -1,0 +1,31 @@
+
+-------------------------------------------------------------------------------
+   ROBOCOPY     ::     Robust File Copy for Windows                              
+-------------------------------------------------------------------------------
+
+  Started : � 04  2026 10:26:47
+   Source : c:\Users\shukr\OneDrive\שולחן העבודה\s trader 1\s trader pwa\src\
+     Dest : c:\Users\shukr\OneDrive\מסמכים\GitHub\s-trader-app\src\
+
+    Files : *.*
+	    
+  Options : *.* /TEE /S /E /DCOPY:DA /COPY:DAT /NP /MT:8 /R:3 /W:5 
+
+------------------------------------------------------------------------------
+
+	    Newer     		   53503	c:\Users\shukr\OneDrive\שולחן העבודה\s trader 1\s trader pwa\src\App.jsx
+	    Newer     		    9535	c:\Users\shukr\OneDrive\שולחן העבודה\s trader 1\s trader pwa\src\firebaseConfig.js
+
+------------------------------------------------------------------------------
+
+               Total    Copied   Skipped  Mismatch    FAILED    Extras
+    Dirs :         4         4         4         0         0         0
+   Files :        23         2        21         0         0         0
+   Bytes :   902.1 k    61.5 k   840.5 k         0         0         0
+   Times :   0:00:00   0:00:00                       0:00:00   0:00:00
+
+
+   Speed :           63,038,000 Bytes/sec.
+   Speed :            3,607.063 MegaBytes/min.
+   Ended : � 04  2026 10:26:47
+

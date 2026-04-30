@@ -1,0 +1,59 @@
+
+-------------------------------------------------------------------------------
+   ROBOCOPY     ::     Robust File Copy for Windows                              
+-------------------------------------------------------------------------------
+
+  Started : � 03  2026 17:34:32
+   Source : c:\Users\shukr\OneDrive\שולחן העבודה\s trader 1\s trader pwa\
+     Dest : c:\Users\shukr\OneDrive\מסמכים\GitHub\s-trader-app\
+
+    Files : *.*
+	    
+Exc Files : package-lock.json
+	    
+ Exc Dirs : node_modules
+	    .git
+	    .github
+	    .vscode
+	    dist
+	    
+  Options : *.* /TEE /S /E /DCOPY:DA /COPY:DAT /NP /MT:8 /R:3 /W:5 
+
+------------------------------------------------------------------------------
+
+	*EXTRA Dir        -1	c:\Users\shukr\OneDrive\מסמכים\GitHub\s-trader-app\assets\
+	  *EXTRA File 		  791399	c:\Users\shukr\OneDrive\מסמכים\GitHub\s-trader-app\icon.png
+	  *EXTRA File 		  167562	c:\Users\shukr\OneDrive\מסמכים\GitHub\s-trader-app\logo_new.png
+	  *EXTRA File 		     766	c:\Users\shukr\OneDrive\מסמכים\GitHub\s-trader-app\manifest.webmanifest
+	  *EXTRA File 		  233640	c:\Users\shukr\OneDrive\מסמכים\GitHub\s-trader-app\splash_logo.jpg
+	  *EXTRA File 		    1845	c:\Users\shukr\OneDrive\מסמכים\GitHub\s-trader-app\sw.js
+	  *EXTRA File 		       0	c:\Users\shukr\OneDrive\מסמכים\GitHub\s-trader-app\sync_log.txt
+	  *EXTRA File 		    1497	c:\Users\shukr\OneDrive\מסמכים\GitHub\s-trader-app\vite.svg
+	  *EXTRA File 		   21874	c:\Users\shukr\OneDrive\מסמכים\GitHub\s-trader-app\workbox-1d305bb8.js
+	    New File  		    5474	c:\Users\shukr\OneDrive\שולחן העבודה\s trader 1\s trader pwa\FIREBASE_UPGRADE.md
+	    New File  		     942	c:\Users\shukr\OneDrive\שולחן העבודה\s trader 1\s trader pwa\firestore.rules
+	    Older     		    1874	c:\Users\shukr\OneDrive\שולחן העבודה\s trader 1\s trader pwa\index.html
+	    New File  		   10952	c:\Users\shukr\OneDrive\שולחן העבודה\s trader 1\s trader pwa\MIGRATION_GUIDE.md
+	    Newer     		    1071	c:\Users\shukr\OneDrive\שולחן העבודה\s trader 1\s trader pwa\package.json
+	    New File  		    2926	c:\Users\shukr\OneDrive\שולחן העבודה\s trader 1\s trader pwa\QUICK_START.md
+	    New File  		    8155	c:\Users\shukr\OneDrive\שולחן העבודה\s trader 1\s trader pwa\README_FINAL.md
+	    New File  		    4602	c:\Users\shukr\OneDrive\שולחן העבודה\s trader 1\s trader pwa\SECURITY_RULES_SETUP.md
+	    New File  		    5914	c:\Users\shukr\OneDrive\שולחן העבודה\s trader 1\s trader pwa\START_HERE.md
+	    New File  		    9660	c:\Users\shukr\OneDrive\שולחן העבודה\s trader 1\s trader pwa\UPGRADE_SUMMARY.md
+	    New File  		    8150	c:\Users\shukr\OneDrive\שולחן העבודה\s trader 1\s trader pwa\src\firebaseConfig.js
+	    Newer     		  162592	c:\Users\shukr\OneDrive\שולחן העבודה\s trader 1\s trader pwa\src\StocksApp.jsx
+	    Newer     		  200992	c:\Users\shukr\OneDrive\שולחן העבודה\s trader 1\s trader pwa\src\apps\FuturesApp.jsx
+
+------------------------------------------------------------------------------
+
+               Total    Copied   Skipped  Mismatch    FAILED    Extras
+    Dirs :         8         6         8         0         0         2
+   Files :        41        13        28         0         0         8
+   Bytes :    2.46 m   413.3 k    2.05 m         0         0    1.16 m
+   Times :   0:00:00   0:00:00                       0:00:00   0:00:00
+
+
+   Speed :           32,561,846 Bytes/sec.
+   Speed :            1,863.204 MegaBytes/min.
+   Ended : � 03  2026 17:34:32
+
