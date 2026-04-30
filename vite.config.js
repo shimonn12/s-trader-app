@@ -3,7 +3,7 @@ import react from '@vitejs/plugin-react'
 import { VitePWA } from 'vite-plugin-pwa'
 
 export default defineConfig({
-    base: '/s-trader-app/', // הנתיב המדויק בגיטהאב
+    base: './', // שימוש בנתיב יחסי מאפשר גמישות בגיטהאב
     plugins: [
         react(),
         VitePWA({
@@ -21,21 +21,21 @@ export default defineConfig({
                 background_color: '#0b1527',
                 display: 'standalone',
                 orientation: 'portrait',
-                scope: '/s-trader-app/',
-                start_url: '/s-trader-app/',
+                scope: './',
+                start_url: './',
                 icons: [
                     {
-                        src: '/s-trader-app/icon.png',
+                        src: 'icon.png',
                         sizes: '192x192',
                         type: 'image/png'
                     },
                     {
-                        src: '/s-trader-app/icon.png',
+                        src: 'icon.png',
                         sizes: '512x512',
                         type: 'image/png'
                     },
                     {
-                        src: '/s-trader-app/icon.png',
+                        src: 'icon.png',
                         sizes: '512x512',
                         type: 'image/png',
                         purpose: 'maskable'
