@@ -3781,20 +3781,18 @@ export default function FuturesApp({ username: propUsername, onLogout: propOnLog
 
         // 2. Register Device and Start Relay Sync
         tradeService.registerDevice(user);
+    }, [user, hydrated]);
 
-        // 3. Periodic Pull from Relay Sync Queue
-        const syncInterval = setInterval(async () => {
-            const items = await tradeService.pullItems(user, 'futures');
+    // 2. Controlled Inbound Sync from Cloud
+        const performSync = async () => {
+            console.log("📥 Checking for updates from cloud (Futures)...");
+            const items = await tradeService.syncFromCloud(user, 'futures');
             if (items && items.length > 0) {
-                console.log(`📦 Received ${items.length} sync items (Futures)`);
+                console.log(`📦 Applied ${items.length} sync items (Futures)`);
 
                 for (const item of items) {
                     if (item.item_type === 'trade') {
                         const syncedTrade = item.payload;
-                        
-                        // RELAY SYNC: Do NOT filter by IgnoreBefore here.
-                        // If another device sent this trade, we want it, regardless of date.
-                        
                         setTrades(prev => {
                             let newTrades = [...prev];
                             if (syncedTrade.deleted) {
@@ -3812,22 +3810,16 @@ export default function FuturesApp({ username: propUsername, onLogout: propOnLog
                     }
 
                     if (item.item_type === 'goals') {
-                        const syncedGoals = item.payload;
-                        console.log("🎯 Received goals sync (Futures):", syncedGoals);
-                        setGoals(syncedGoals);
+                        setGoals(item.payload);
                     }
 
                     if (item.item_type === 'capital') {
-                        const syncedCapital = item.payload.startingCapital;
-                        console.log("💰 Received capital sync (Futures):", syncedCapital);
-                        setStartingCapital(syncedCapital);
+                        setStartingCapital(item.payload.startingCapital);
                     }
 
                     if (item.item_type === 'colmex_status') {
                         const { connected } = item.payload;
-                        console.log("🔄 Received Colmex status sync:", connected ? "Connected" : "Disconnected");
                         if (!connected) {
-                            // If remote disconnected, we must clear local session
                             localStorage.removeItem('colmex_access_token');
                             localStorage.removeItem('colmex_refresh_token');
                             setIsColmexConnected(false);
@@ -3838,9 +3830,7 @@ export default function FuturesApp({ username: propUsername, onLogout: propOnLog
                     if (item.item_type === 'colmex_reset') {
                         const { ignoreBefore, journalType } = item.payload;
                         if (ignoreBefore && journalType === 'futures') {
-                            console.log("🔄 Received Colmex Reset sync for Futures. Ignoring trades before:", ignoreBefore);
                             localStorage.setItem('colmex_ignore_before_futures', ignoreBefore);
-                            
                             localStorage.removeItem('colmex_stats_futures');
                             localStorage.removeItem('colmex_activity_logs');
                             window.dispatchEvent(new Event('colmex_stats_updated'));
@@ -3851,72 +3841,87 @@ export default function FuturesApp({ username: propUsername, onLogout: propOnLog
 
                     if (item.item_type === 'colmex_tokens') {
                         const tokens = item.payload;
-                        console.log("🔄 Received fresh Colmex tokens from another device");
                         if (tokens.access_token) {
                             localStorage.setItem('colmex_access_token', tokens.access_token);
-                            if (tokens.refresh_token) {
-                                localStorage.setItem('colmex_refresh_token', tokens.refresh_token);
-                            }
+                            if (tokens.refresh_token) localStorage.setItem('colmex_refresh_token', tokens.refresh_token);
                             setIsColmexConnected(true);
                             colmexService.addLog('פרטי החיבור עודכנו ממכשיר אחר.', 'info');
                         }
                     }
 
-                    if (item.item_type === 'image_chunk') {
-                        const { tradeId, imageId, chunk, index, total } = item.payload;
-                        setChunkBuffers(prev => {
-                            const buffer = prev[imageId] || { chunks: [], count: 0, total };
-                            if (!buffer.chunks[index]) {
-                                buffer.chunks[index] = chunk;
-                                buffer.count++;
-                            }
-
-                            if (buffer.count === total) {
-                                const fullBase64 = buffer.chunks.join('');
-                                console.log(`✅ Image ${imageId} reassembled for trade ${tradeId}`);
-                                setTrades(tList => tList.map(t => String(t.id) === String(tradeId) ? { ...t, image: fullBase64 } : t));
-                                const next = { ...prev };
-                                delete next[imageId];
-                                return next;
-                            }
-                            return { ...prev, [imageId]: buffer };
-                        });
+                    if (item.item_type === 'image' && item.payload.tradeId && item.payload.image) {
+                        setTrades(tList => tList.map(t => String(t.id) === String(item.payload.tradeId) ? { ...t, image: item.payload.image } : t));
                     }
 
-                    tradeService.acknowledgeItem(item.id, tradeService.getDeviceId());
+                    // Special: History Request handling
+                    if (item.item_type === 'history_request') {
+                        tradeService.provideHistory(user, 'futures', item.sender_device_id);
+                    }
+
+                    // Special: Full History receipt (for Device C)
+                    if (item.item_type === 'full_history' && item.payload.trades) {
+                        console.log("🏁 Received full history sync (Futures)!");
+                        setTrades(item.payload.trades);
+                    }
                 }
             }
-        }, 5000); // Check relay every 5 seconds
-
-        return () => {
-            clearInterval(syncInterval);
         };
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [user]);
 
-    // 4. Periodic Cloud Backup (Full State Mirror) - Safe interval
-    useEffect(() => {
-        if (!user || !hydrated) return;
+        useEffect(() => {
+            if (!user || !hydrated) return;
 
-        const backupInterval = setInterval(async () => {
+            // Sync on initial hydration
+            performSync();
+
+            // Sync on visibility change (returning to app)
+            const handleVisibilityChange = () => {
+                if (document.visibilityState === 'visible') {
+                    performSync();
+                }
+            };
+            document.addEventListener('visibilitychange', handleVisibilityChange);
+
+            return () => {
+                document.removeEventListener('visibilitychange', handleVisibilityChange);
+            };
+        }, [user, hydrated]);
+
+        useEffect(() => {
+            if (hydrated && trades.length === 0 && user) {
+                const timer = setTimeout(() => {
+                    if (trades.length === 0) {
+                        tradeService.requestHistory(user, 'futures');
+                    }
+                }, 5000);
+                return () => clearTimeout(timer);
+            }
+        }, [hydrated, trades.length, user]);
+
+        // 4. Central Save Effect (Local DB + Throttled Cloud Backup)
+        const lastBackupRef = useRef(0);
+        useEffect(() => {
+            if (!user || !hydrated) return;
+
             const dataToSave = {
                 trades,
                 settings,
                 startingCapital,
                 goals,
-                lang,
+                lang
             };
-            console.log("☁️ Periodic Cloud Backup (Futures)...");
-            try {
-                // Update profile doesn't trigger state change that loops back here
-                await tradeService.updateProfile(user, { futures_data: dataToSave });
-            } catch (e) {
-                console.error("Backup failed (Futures):", e);
-            }
-        }, 15000); // Backup every 15 seconds
 
-        return () => clearInterval(backupInterval);
-    }, [user, hydrated, trades, settings, startingCapital, goals, lang]);
+            // Local Save (Frequent)
+            localDbService.saveUserData(user, 'futures', dataToSave).catch(error => {
+                console.error('Failed to save local futures data:', error);
+            });
+
+            // Cloud Master Backup (Infrequent - every 5 mins)
+            const now = Date.now();
+            if (now - lastBackupRef.current > 5 * 60 * 1000) {
+                lastBackupRef.current = now;
+                tradeService.backupState(user, 'futures', dataToSave);
+            }
+        }, [trades, settings, startingCapital, goals, user, hydrated, lang]);
 
 
     const handleLogin = (username) => setUser(username);

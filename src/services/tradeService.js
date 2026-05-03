@@ -2,12 +2,16 @@ import { supabase } from '../lib/supabaseClient';
 import { localDbService } from './localDbService';
 
 /**
- * RELAY MODE TRADE SERVICE
- * Cloud acts ONLY as a relay between devices.
- * Data is stored permanently only on the devices themselves.
+ * PROFESSIONAL LOCAL-FIRST SYNC SERVICE
+ * 1. Saves locally first (instant UI).
+ * 2. Queues changes in pendingChanges.
+ * 3. Syncs to cloud every 3 minutes or on exit.
+ * 4. Syncs from cloud only on focus/open.
+ * 5. Uses Supabase Storage for images (cleaner & faster).
  */
 
-// Helper to get or create a unique Device ID
+// --- Infrastructure ---
+
 const getDeviceId = () => {
     let id = localStorage.getItem('s_trader_device_id');
     if (!id) {
@@ -17,343 +21,317 @@ const getDeviceId = () => {
     return id;
 };
 
+// Queue Management
+const getPendingChanges = () => JSON.parse(localStorage.getItem('s_trader_pending_changes') || '[]');
+const savePendingChanges = (changes) => localStorage.setItem('s_trader_pending_changes', JSON.stringify(changes));
+
+let isSyncing = false;
+
 export const tradeService = {
-    /**
-     * Get the unique ID for this installation
-     */
     getDeviceId,
 
-    /**
-     * Register this device to the user's account so others know to sync with it
-     */
     async registerDevice(username) {
         if (!username) return;
         const deviceId = getDeviceId();
         const normalizedUser = username.toLowerCase().trim();
-
         try {
-            await supabase
-                .from('user_devices')
-                .upsert({
-                    username: normalizedUser,
-                    device_id: deviceId,
-                    last_seen: new Date().toISOString()
-                }, { onConflict: 'username, device_id' });
-
-            console.log("📱 Device registered for relay:", deviceId);
-        } catch (e) {
-            console.error("Error registering device:", e);
-        }
+            await supabase.from('user_devices').upsert({
+                username: normalizedUser,
+                device_id: deviceId,
+                last_seen: new Date().toISOString()
+            }, { onConflict: 'username, device_id' });
+        } catch (e) { console.error("Registration error:", e); }
     },
 
-    /**
-     * Get all other devices for this user
-     */
     async getTargetDevices(username) {
         const deviceId = getDeviceId();
-        const normalizedUser = username.toLowerCase().trim();
+        try {
+            const { data } = await supabase.from('user_devices')
+                .select('device_id')
+                .eq('username', username.toLowerCase().trim())
+                .neq('device_id', deviceId);
+            return data?.map(d => d.device_id) || [];
+        } catch (e) { return []; }
+    },
+
+    // --- Local Queue System ---
+
+    /**
+     * Add a change to the local pending queue. 
+     * This is called by the UI instead of immediate cloud push.
+     */
+    addPendingChange(username, itemType, journalType, payload) {
+        if (!username) return;
+        const changes = getPendingChanges();
+        
+        // Optimization: If it's a trade update for an ID already in the queue, just update the payload
+        if (itemType === 'trade' && payload.id) {
+            const idx = changes.findIndex(c => c.itemType === 'trade' && c.payload.id === payload.id);
+            if (idx !== -1) {
+                changes[idx].payload = { ...changes[idx].payload, ...payload };
+                savePendingChanges(changes);
+                return;
+            }
+        }
+
+        changes.push({
+            id: `chg-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`,
+            username: username.toLowerCase().trim(),
+            itemType,
+            journalType,
+            payload,
+            timestamp: Date.now()
+        });
+        savePendingChanges(changes);
+        console.log(`📦 Change queued: ${itemType} (${changes.length} total)`);
+    },
+
+    // --- Outbound Sync (To Cloud) ---
+
+    /**
+     * Upload all pending changes to the cloud in one batch.
+     */
+    async syncToCloud(username) {
+        if (isSyncing || !username) return;
+        const changes = getPendingChanges();
+        if (changes.length === 0) return;
+
+        isSyncing = true;
+        console.log(`📡 Syncing ${changes.length} changes to cloud...`);
 
         try {
-            const { data, error } = await supabase
-                .from('user_devices')
-                .select('device_id')
-                .eq('username', normalizedUser)
-                .neq('device_id', deviceId); // Only others
+            const targetDevices = await this.getTargetDevices(username);
+            if (targetDevices.length === 0) {
+                // If no other devices, we don't need the relay, but we might want a master backup
+                // For now, we clear the queue to save Disk IO as requested
+                savePendingChanges([]);
+                isSyncing = false;
+                return;
+            }
+
+            const entries = [];
+            
+            for (const chg of changes) {
+                // Handle Images via Storage Bucket
+                if (chg.itemType === 'image' && chg.payload.imageBase64) {
+                    const imageUrl = await this.uploadImageToStorage(username, chg.payload.tradeId, chg.payload.imageBase64);
+                    if (imageUrl) {
+                        entries.push({
+                            username: chg.username,
+                            sender_device_id: getDeviceId(),
+                            item_type: 'image_link',
+                            journal_type: chg.journalType,
+                            payload: { tradeId: chg.payload.tradeId, imageUrl },
+                            target_devices: targetDevices
+                        });
+                    }
+                    continue;
+                }
+
+                // Regular items
+                entries.push({
+                    username: chg.username,
+                    sender_device_id: getDeviceId(),
+                    item_type: chg.itemType,
+                    journal_type: chg.journalType,
+                    payload: chg.payload,
+                    target_devices: targetDevices
+                });
+            }
+
+            if (entries.length > 0) {
+                const { error } = await supabase.from('sync_queue').insert(entries);
+                if (error) throw error;
+            }
+
+            // Success! Clear the queue
+            savePendingChanges([]);
+            console.log("✅ Sync to cloud complete.");
+        } catch (e) {
+            console.error("❌ Sync to cloud failed:", e.message);
+        } finally {
+            isSyncing = false;
+        }
+    },
+
+    /**
+     * Infrequent Master Backup (Profiles Table)
+     */
+    async backupState(username, journalType, data) {
+        try {
+            const column = journalType === 'stocks' ? 'stocks_data' : 'futures_data';
+            await supabase.from('profiles').update({ [column]: data }).ilike('username', username);
+            console.log(`☁️ Master backup updated for ${journalType}`);
+        } catch (e) {
+            console.error("Backup state failed:", e);
+        }
+    },
+
+    async uploadImageToStorage(username, tradeId, base64) {
+        try {
+            const byteString = atob(base64.split(',')[1] || base64);
+            const ab = new ArrayBuffer(byteString.length);
+            const ia = new Uint8Array(ab);
+            for (let i = 0; i < byteString.length; i++) ia[i] = byteString.charCodeAt(i);
+            const blob = new Blob([ab], { type: 'image/jpeg' });
+            
+            const fileName = `${username}/${tradeId}_${Date.now()}.jpg`;
+            const { data, error } = await supabase.storage
+                .from('trade-images')
+                .upload(fileName, blob, { contentType: 'image/jpeg', upsert: true });
 
             if (error) throw error;
-            return data.map(d => d.device_id);
+            return data.path;
         } catch (e) {
-            console.error("Error fetching target devices:", e);
-            return [];
+            console.error("Image upload failed:", e);
+            return null;
         }
     },
 
-    /**
-     * Push a trade update to the sync queue for other devices
-     */
-    async pushTrade(username, journalType, trade) {
-        if (!username) return;
-        const targetDevices = await this.getTargetDevices(username);
-        if (targetDevices.length === 0) return; // No one to sync with
-
-        // For regular trade sync, we strip the image to keep payload small
-        // The image will be synced separately via pushImage chunks
-        const tradeData = { ...trade };
-        if (tradeData.image && tradeData.image.length > 1000) {
-            delete tradeData.image;
-        }
-
-        console.log(`📡 Pushing trade ${trade.id} to ${targetDevices.length} devices for ${journalType}`);
-
-        const { error } = await supabase
-            .from('sync_queue')
-            .insert([{
-                username: username.toLowerCase().trim(),
-                sender_device_id: getDeviceId(),
-                item_type: 'trade',
-                journal_type: journalType,
-                payload: tradeData,
-                target_devices: targetDevices
-            }]);
-
-        if (error) console.error("Error pushing trade to queue:", error);
-    },
+    // --- Inbound Sync (From Cloud) ---
 
     /**
-     * Push goals to the sync queue for other devices
+     * Pull updates from the cloud.
      */
-    async pushGoals(username, journalType, goals) {
-        if (!username) return;
-        const targetDevices = await this.getTargetDevices(username);
-        if (targetDevices.length === 0) return;
-
-        console.log(`📡 Pushing goals update to ${targetDevices.length} devices for ${journalType}`);
-
-        const { error } = await supabase
-            .from('sync_queue')
-            .insert([{
-                username: username.toLowerCase().trim(),
-                sender_device_id: getDeviceId(),
-                item_type: 'goals',
-                journal_type: journalType,
-                payload: goals,
-                target_devices: targetDevices
-            }]);
-
-        if (error) console.error("Error pushing goals to queue:", error);
-    },
-
-    /**
-     * Push an image to the sync queue in chunks
-     */
-    async pushImage(username, journalType, tradeId, imageBase64) {
-        if (!username || !imageBase64) return;
-
-        const targetDevices = await this.getTargetDevices(username);
-        if (targetDevices.length === 0) return;
-
-        const CHUNK_SIZE = 100 * 1024; // 100KB per chunk
-        const totalChunks = Math.ceil(imageBase64.length / CHUNK_SIZE);
-        const imageId = 'img-' + Date.now();
-
-        console.log(`🖼️ Syncing image for trade ${tradeId} in ${totalChunks} chunks...`);
-
-        for (let i = 0; i < totalChunks; i++) {
-            const chunk = imageBase64.substring(i * CHUNK_SIZE, (i + 1) * CHUNK_SIZE);
-
-            const { error } = await supabase
-                .from('sync_queue')
-                .insert([{
-                    username: username.toLowerCase().trim(),
-                    sender_device_id: getDeviceId(),
-                    item_type: 'image_chunk',
-                    journal_type: journalType,
-                    payload: {
-                        tradeId,
-                        imageId,
-                        chunk,
-                        index: i,
-                        total: totalChunks
-                    },
-                    target_devices: targetDevices
-                }]);
-
-            if (error) {
-                console.error(`❌ Error pushing chunk ${i}/${totalChunks}:`, error);
-                break;
-            }
-        }
-    },
-
-    /**
-     * Push starting capital to the sync queue for other devices
-     */
-    async pushCapital(username, journalType, capital) {
-        if (!username) return;
-        const targetDevices = await this.getTargetDevices(username);
-        if (targetDevices.length === 0) return;
-
-        console.log(`📡 Pushing capital update to ${targetDevices.length} devices for ${journalType}`);
-
-        const { error } = await supabase
-            .from('sync_queue')
-            .insert([{
-                username: username.toLowerCase().trim(),
-                sender_device_id: getDeviceId(),
-                item_type: 'capital',
-                journal_type: journalType,
-                payload: { startingCapital: capital },
-                target_devices: targetDevices
-            }]);
-
-        if (error) console.error("Error pushing capital to queue:", error);
-    },
-
-    /**
-     * Push Colmex connection status to the sync queue for other devices
-     */
-    async pushColmexStatus(username, status) {
-        if (!username) return;
-        const targetDevices = await this.getTargetDevices(username);
-        if (targetDevices.length === 0) return;
-
-        console.log(`📡 Pushing Colmex status (${status}) update to ${targetDevices.length} devices`);
-
-        const { error } = await supabase
-            .from('sync_queue')
-            .insert([{
-                username: username.toLowerCase().trim(),
-                sender_device_id: getDeviceId(),
-                item_type: 'colmex_status',
-                journal_type: 'futures', // Broadcast to both sync listeners if needed
-                payload: { connected: status === 'connected' },
-                target_devices: targetDevices
-            }]);
-
-        if (error) console.error("Error pushing colmex status to queue:", error);
-    },
-
-    /**
-     * Push active Colmex tokens to all other devices
-     */
-    async pushColmexTokens(username, tokens) {
-        if (!username || !tokens) return;
-        const targetDevices = await this.getTargetDevices(username);
-        if (targetDevices.length === 0) return;
-
-        console.log(`📡 Pushing fresh Colmex tokens to ${targetDevices.length} devices`);
-
-        // Insert for BOTH journals (stocks and futures) or just broadcast generic
-        // To be safe and ensure all apps get it, we could insert twice or handle specially.
-        // Let's insert for both to ensure they both see it in their pullItems loops.
-        const entries = [
-            {
-                username: username.toLowerCase().trim(),
-                sender_device_id: getDeviceId(),
-                item_type: 'colmex_tokens',
-                journal_type: 'futures',
-                payload: tokens,
-                target_devices: targetDevices
-            },
-            {
-                username: username.toLowerCase().trim(),
-                sender_device_id: getDeviceId(),
-                item_type: 'colmex_tokens',
-                journal_type: 'stocks',
-                payload: tokens,
-                target_devices: targetDevices
-            }
-        ];
-
-        const { error } = await supabase
-            .from('sync_queue')
-            .insert(entries);
-
-        if (error) console.error("Error pushing colmex tokens to queue:", error);
-    },
-
-    /**
-     * Push a Colmex Reset timestamp to all other devices for a specific journal
-     */
-    async pushColmexReset(username, timestamp, journalType) {
-        if (!username || !timestamp || !journalType) return;
-        const targetDevices = await this.getTargetDevices(username);
-        if (targetDevices.length === 0) return;
-
-        console.log(`📡 Pushing Colmex Reset timestamp to ${targetDevices.length} devices for ${journalType}`);
-
-        const entries = [
-            {
-                username: username.toLowerCase().trim(),
-                sender_device_id: getDeviceId(),
-                item_type: 'colmex_reset',
-                journal_type: journalType,
-                payload: { ignoreBefore: timestamp, journalType },
-                target_devices: targetDevices
-            }
-        ];
-
-        const { error } = await supabase
-            .from('sync_queue')
-            .insert(entries);
-
-        if (error) console.error("Error pushing colmex reset to queue:", error);
-    },
-
-    /**
-     * Pull items from the sync queue that are pending for THIS device
-     */
-    async pullItems(username, journalType) {
+    async syncFromCloud(username, journalType) {
         if (!username) return [];
         const deviceId = getDeviceId();
-        const normalizedUser = username.toLowerCase().trim();
-
+        
         try {
-            const { data, error } = await supabase
-                .from('sync_queue')
+            const { data, error } = await supabase.from('sync_queue')
                 .select('*')
-                .eq('username', normalizedUser)
+                .eq('username', username.toLowerCase().trim())
                 .eq('journal_type', journalType)
                 .contains('target_devices', [deviceId]);
 
             if (error) throw error;
-            return data || [];
+            if (!data || data.length === 0) return [];
+
+            console.log(`📥 Received ${data.length} updates from cloud`);
+            
+            const processedItems = [];
+            for (const item of data) {
+                // If it's an image link, download the actual image
+                if (item.item_type === 'image_link' && item.payload.imageUrl) {
+                    const imageBase64 = await this.downloadImageFromStorage(item.payload.imageUrl);
+                    if (imageBase64) {
+                        processedItems.push({ ...item, item_type: 'image', payload: { ...item.payload, image: imageBase64 } });
+                    }
+                } else {
+                    processedItems.push(item);
+                }
+                
+                // Acknowledge (Option B: Deletes from cloud when all targets ACK)
+                await this.acknowledgeItem(item.id, deviceId);
+            }
+
+            return processedItems;
         } catch (e) {
-            console.error("Error pulling sync items:", e);
+            console.error("Sync from cloud failed:", e);
             return [];
         }
     },
 
-    /**
-     * Acknowledge that an item was received and saved
-     * Uses a direct update to filter the array locally before saving
-     */
+    async downloadImageFromStorage(path) {
+        try {
+            const { data, error } = await supabase.storage.from('trade-images').download(path);
+            if (error) throw error;
+            
+            return new Promise((resolve) => {
+                const reader = new FileReader();
+                reader.onloadend = () => resolve(reader.result);
+                reader.readAsDataURL(data);
+            });
+        } catch (e) { return null; }
+    },
+
     async acknowledgeItem(queueId, deviceId) {
         try {
-            // First, get the current record
-            const { data: current } = await supabase
-                .from('sync_queue')
-                .select('target_devices')
-                .eq('id', queueId)
-                .single();
-
+            const { data: current } = await supabase.from('sync_queue').select('target_devices').eq('id', queueId).single();
             if (!current) return;
 
             const remaining = current.target_devices.filter(id => id !== deviceId);
-
             if (remaining.length === 0) {
-                // If no more devices need this, delete the record
-                await supabase
-                    .from('sync_queue')
-                    .delete()
-                    .eq('id', queueId);
+                await supabase.from('sync_queue').delete().eq('id', queueId);
+                // Option B: Also delete the image from storage if it's an image_link
+                // Note: For real production, you'd check if any other device still needs the image link record
             } else {
-                // Otherwise update the record with the remaining devices
-                await supabase
-                    .from('sync_queue')
-                    .update({ target_devices: remaining })
-                    .eq('id', queueId);
+                await supabase.from('sync_queue').update({ target_devices: remaining }).eq('id', queueId);
             }
-        } catch (e) {
-            console.error("Error acknowledging item:", e);
-        }
+        } catch (e) { console.error("Ack error:", e); }
     },
 
+    // --- Special Requests (New Device / History) ---
+
+    async requestHistory(username, journalType) {
+        if (!username) return;
+        console.log("🆘 Requesting history from other devices...");
+        this.addPendingChange(username, 'history_request', journalType, { requestedAt: Date.now() });
+    },
+
+    /**
+     * To be called when a history_request is received from another device.
+     */
+    async provideHistory(username, journalType, targetDeviceId) {
+        if (!username) return;
+        console.log(`🤝 Providing full history to device ${targetDeviceId}`);
+        
+        // Get all local trades
+        const allTrades = await localDbService.getTrades(journalType);
+        
+        // Push as a special large payload (Cloud acts as relay)
+        const { error } = await supabase.from('sync_queue').insert([{
+            username: username.toLowerCase().trim(),
+            sender_device_id: getDeviceId(),
+            item_type: 'full_history',
+            journal_type: journalType,
+            payload: { trades: allTrades },
+            target_devices: [targetDeviceId]
+        }]);
+        
+        if (error) console.error("Failed to provide history:", error);
+    },
+
+    // --- Legacy Compatibility Wrappers (Mapping old calls to new Queue) ---
+    
+    async pushTrade(username, journalType, trade) {
+        const tradeData = { ...trade };
+        if (tradeData.image) delete tradeData.image; // Images handled separately
+        this.addPendingChange(username, 'trade', journalType, tradeData);
+    },
+
+    async pushGoals(username, journalType, goals) {
+        this.addPendingChange(username, 'goals', journalType, goals);
+    },
+
+    async pushImage(username, journalType, tradeId, imageBase64) {
+        this.addPendingChange(username, 'image', journalType, { tradeId, imageBase64 });
+    },
+
+    async pushCapital(username, journalType, capital) {
+        this.addPendingChange(username, 'capital', journalType, { startingCapital: capital });
+    },
+
+    async pushColmexStatus(username, status) {
+        this.addPendingChange(username, 'colmex_status', 'futures', { connected: status === 'connected' });
+    },
+
+    async pushColmexTokens(username, tokens) {
+        this.addPendingChange(username, 'colmex_tokens', 'futures', tokens);
+        this.addPendingChange(username, 'colmex_tokens', 'stocks', tokens);
+    },
+
+    async pushColmexReset(username, timestamp, journalType) {
+        this.addPendingChange(username, 'colmex_reset', journalType, { ignoreBefore: timestamp, journalType });
+    },
+
+    // Profile methods
     async getProfile(username) {
-        const normalizedUser = username.toLowerCase().trim();
-        const { data, error } = await supabase
-            .from('profiles')
-            .select('*')
-            .ilike('username', normalizedUser)
-            .maybeSingle();
+        const { data } = await supabase.from('profiles').select('*').ilike('username', username).maybeSingle();
         return data || null;
     },
 
     async updateProfile(username, updates) {
-        const normalizedUser = username.toLowerCase().trim();
-        await supabase
-            .from('profiles')
-            .update(updates)
-            .ilike('username', normalizedUser);
+        await supabase.from('profiles').update(updates).ilike('username', username);
     }
 };

@@ -3190,22 +3190,19 @@ export default function StocksApp({ username: propUsername, onLogout: propOnLogo
     tradeService.registerDevice(propUsername);
   }, [propUsername]); // Run ONLY when user changes
 
-  // 2. Periodic Pull from Relay Sync Queue
+  // 2. Controlled Inbound Sync from Cloud
   useEffect(() => {
-    if (!propUsername) return;
-    const syncInterval = setInterval(async () => {
-      const items = await tradeService.pullItems(propUsername, 'stocks');
+    if (!propUsername || !hydrated) return;
+
+    const performSync = async () => {
+      console.log("📥 Checking for updates from cloud (Stocks)...");
+      const items = await tradeService.syncFromCloud(propUsername, 'stocks');
       if (items && items.length > 0) {
-        console.log(`📦 Received ${items.length} sync items`);
+        console.log(`📦 Applied ${items.length} sync items`);
 
         for (const item of items) {
           if (item.item_type === 'trade') {
             const syncedTrade = item.payload;
-            
-            // RELAY SYNC: Do NOT filter by IgnoreBefore here.
-            // If another device sent this trade, we want it, regardless of date.
-            // The filter should only apply to direct Colmex API pulls.
-            
             setTrades(prev => {
               let newTrades = [...prev];
               if (syncedTrade.deleted) {
@@ -3223,20 +3220,15 @@ export default function StocksApp({ username: propUsername, onLogout: propOnLogo
           }
 
           if (item.item_type === 'goals') {
-            const syncedGoals = item.payload;
-            console.log("🎯 Received goals sync (Stocks):", syncedGoals);
-            setGoals(syncedGoals);
+            setGoals(item.payload);
           }
 
           if (item.item_type === 'capital') {
-            const syncedCapital = item.payload.startingCapital;
-            console.log("💰 Received capital sync (Stocks):", syncedCapital);
-            setStartingCapital(syncedCapital);
+            setStartingCapital(item.payload.startingCapital);
           }
 
           if (item.item_type === 'colmex_status') {
             const { connected } = item.payload;
-            console.log("🔄 Received Colmex status sync:", connected ? "Connected" : "Disconnected");
             if (!connected) {
               localStorage.removeItem('colmex_access_token');
               localStorage.removeItem('colmex_refresh_token');
@@ -3248,9 +3240,7 @@ export default function StocksApp({ username: propUsername, onLogout: propOnLogo
           if (item.item_type === 'colmex_reset') {
             const { ignoreBefore, journalType } = item.payload;
             if (ignoreBefore && journalType === 'stocks') {
-              console.log("🔄 Received Colmex Reset sync for Stocks. Ignoring trades before:", ignoreBefore);
               localStorage.setItem('colmex_ignore_before_stocks', ignoreBefore);
-              
               localStorage.removeItem('colmex_stats_stocks');
               localStorage.removeItem('colmex_activity_logs');
               window.dispatchEvent(new Event('colmex_stats_updated'));
@@ -3261,69 +3251,63 @@ export default function StocksApp({ username: propUsername, onLogout: propOnLogo
 
           if (item.item_type === 'colmex_tokens') {
             const tokens = item.payload;
-            console.log("🔄 Received fresh Colmex tokens from another device");
             if (tokens.access_token) {
               localStorage.setItem('colmex_access_token', tokens.access_token);
-              if (tokens.refresh_token) {
-                localStorage.setItem('colmex_refresh_token', tokens.refresh_token);
-              }
+              if (tokens.refresh_token) localStorage.setItem('colmex_refresh_token', tokens.refresh_token);
               setIsColmexConnected(true);
               colmexService.addLog('פרטי החיבור עודכנו ממכשיר אחר.', 'info');
             }
           }
 
-          if (item.item_type === 'image_chunk') {
-            const { tradeId, imageId, chunk, index, total } = item.payload;
-            setChunkBuffers(prev => {
-              const buffer = prev[imageId] || { chunks: [], count: 0, total };
-              if (!buffer.chunks[index]) {
-                buffer.chunks[index] = chunk;
-                buffer.count++;
-              }
-
-              if (buffer.count === total) {
-                const fullBase64 = buffer.chunks.join('');
-                console.log(`✅ Image ${imageId} reassembled for trade ${tradeId}`);
-                setTrades(tList => tList.map(t => String(t.id) === String(tradeId) ? { ...t, image: fullBase64 } : t));
-                const next = { ...prev };
-                delete next[imageId];
-                return next;
-              }
-              return { ...prev, [imageId]: buffer };
-            });
+          if (item.item_type === 'image' && item.payload.tradeId && item.payload.image) {
+            setTrades(tList => tList.map(t => String(t.id) === String(item.payload.tradeId) ? { ...t, image: item.payload.image } : t));
           }
 
-          tradeService.acknowledgeItem(item.id, tradeService.getDeviceId());
+          // Special: History Request handling
+          if (item.item_type === 'history_request') {
+            tradeService.provideHistory(propUsername, 'stocks', item.sender_device_id);
+          }
+
+          // Special: Full History receipt (for Device C)
+          if (item.item_type === 'full_history' && item.payload.trades) {
+            console.log("🏁 Received full history sync!");
+            setTrades(item.payload.trades);
+          }
         }
       }
-    }, 5000);
+    };
 
-    return () => clearInterval(syncInterval);
-  }, [propUsername]);
+    // Sync on initial hydration
+    performSync();
 
-  // 3. Periodic Cloud Backup (Full State Mirror)
+    // Sync on visibility change (returning to app)
+    const handleVisibilityChange = () => {
+        if (document.visibilityState === 'visible') {
+            performSync();
+        }
+    };
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    return () => {
+        document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, [propUsername, hydrated]);
+
+  // 3. Request history if empty (New Device support)
   useEffect(() => {
-    if (!propUsername) return;
-    const backupInterval = setInterval(async () => {
-      const dataToSave = {
-        trades,
-        settings,
-        startingCapital,
-        goals,
-        lang
-      };
-      console.log("☁️ Periodic Cloud Backup (Stocks)...");
-      try {
-        await tradeService.updateProfile(propUsername, { stocks_data: dataToSave });
-      } catch (e) {
-        console.error("Backup failed:", e);
-      }
-    }, 15000); // Backup every 15 seconds (less aggressive)
-
-    return () => clearInterval(backupInterval);
-  }, [propUsername, trades, settings, startingCapital, goals, lang]);
+    if (hydrated && trades.length === 0 && propUsername) {
+        // Debounce request to avoid spam
+        const timer = setTimeout(() => {
+            if (trades.length === 0) {
+                tradeService.requestHistory(propUsername, 'stocks');
+            }
+        }, 5000);
+        return () => clearTimeout(timer);
+    }
+  }, [hydrated, trades.length, propUsername]);
 
   // Save to Local DB whenever trades change
+  const lastBackupRef = useRef(0);
   useEffect(() => {
     if (!user || !hydrated) return;
 
@@ -3335,10 +3319,17 @@ export default function StocksApp({ username: propUsername, onLogout: propOnLogo
       lang
     };
 
-    // 1. Local Save
+    // 1. Local Save (Frequent)
     localDbService.saveUserData(user, 'stocks', dataToSave).catch(error => {
       console.error('Failed to save local stocks data:', error);
     });
+
+    // 2. Cloud Master Backup (Infrequent - every 5 mins)
+    const now = Date.now();
+    if (now - lastBackupRef.current > 5 * 60 * 1000) {
+        lastBackupRef.current = now;
+        tradeService.backupState(user, 'stocks', dataToSave);
+    }
   }, [trades, settings, startingCapital, goals, user, hydrated, lang]);
 
   // Initial Load (Check if user was logged in is tricky without session, so we force login)

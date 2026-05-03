@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { BarChart2, Eye, EyeOff, Coins, TrendingUp, Globe, ChevronDown } from 'lucide-react';
 import FuturesApp from './apps/FuturesApp';
 import StocksApp from './StocksApp';
@@ -1401,6 +1401,31 @@ export default function App() {
             localStorage.removeItem('smartJournal_lastJournal');
         }
     }, [selectedJournal]);
+
+    // --- GLOBAL SYNC ORCHESTRATION ---
+    useEffect(() => {
+        if (!user) return;
+
+        // 1. Initial Sync
+        tradeService.syncToCloud(user);
+
+        // 2. Interval Sync (Every 3 minutes)
+        const outboundInterval = setInterval(() => {
+            console.log("⏰ 3-minute heartbeat: Syncing to cloud...");
+            tradeService.syncToCloud(user);
+        }, 3 * 60 * 1000);
+
+        // 3. Sync on Close
+        const handleBeforeUnload = () => {
+            tradeService.syncToCloud(user);
+        };
+        window.addEventListener('beforeunload', handleBeforeUnload);
+
+        return () => {
+            clearInterval(outboundInterval);
+            window.removeEventListener('beforeunload', handleBeforeUnload);
+        };
+    }, [user]);
 
     useEffect(() => {
         const removeSplash = () => {
