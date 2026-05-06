@@ -28,7 +28,7 @@ if (typeof document !== 'undefined') {
     document.head.appendChild(style);
 }
 
-// Translation function
+// Translation function with safety
 const TRANSLATIONS = {
     en: {
         appTitle: "S Trader",
@@ -258,6 +258,7 @@ const CentralAuth = ({ onLogin, lang: initialLang = 'he' }) => {
     const [isLoading, setIsLoading] = useState(false);
     const [timer, setTimer] = useState(0); // Countdown timer in seconds
 
+
     // Save selected journal to storage whenever it changes
     useEffect(() => {
         localStorage.setItem('smartJournal_lastJournal', selectedJournal);
@@ -306,77 +307,42 @@ const CentralAuth = ({ onLogin, lang: initialLang = 'he' }) => {
 
         // Try local first as a fallback, but cloud is priority
         let activeUser = users[formData.username] || users[usernameId];
+        let isCloudSynced = false;
 
         try {
             // Check cloud with timeout
-            console.log("☁️ Strict Cloud Check for:", usernameId);
+            const cloudPromise = supabase.from('profiles').select('*').ilike('username', usernameId).maybeSingle();
+            const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error('Cloud timeout')), 3000));
 
-            const cloudPromise = supabase
-                .from('profiles')
-                .select('*')
-                .ilike('username', usernameId)
-                .maybeSingle();
-
-            const timeoutPromise = new Promise((_, reject) =>
-                setTimeout(() => reject(new Error("Supabase Timeout")), 5000)
-            );
-
-            let isCloudSynced = false;
             const { data: cloudUser, error: cloudError } = await Promise.race([cloudPromise, timeoutPromise]);
 
             if (cloudError) {
                 console.warn("❌ Cloud check error:", cloudError.message);
             } else if (cloudUser) {
-                console.log("✅ Cloud user found:", cloudUser.username);
-                activeUser = cloudUser;
+                console.log("✅ Cloud user found, updating local data...");
                 isCloudSynced = true;
-                users[usernameId] = cloudUser;
+                
+                // Ensure activeUser exists
+                if (!activeUser) {
+                    activeUser = {
+                        username: usernameId,
+                        password: cloudUser.password,
+                        metadata: cloudUser.metadata || {}
+                    };
+                } else if (cloudUser.password) {
+                    activeUser.password = cloudUser.password;
+                }
+                
+                // Save to localStorage
+                users[usernameId] = { ...activeUser };
                 localStorage.setItem('smartJournal_users', JSON.stringify(users));
 
-                // Sync IgnoreBefore dates from cloud to local storage for cross-device consistency
-                if (cloudUser.stocks_ignore_before) {
-                    localStorage.setItem('colmex_ignore_before_stocks', cloudUser.stocks_ignore_before);
-                }
-                if (cloudUser.futures_ignore_before) {
-                    localStorage.setItem('colmex_ignore_before_futures', cloudUser.futures_ignore_before);
-                }
-
-                // Seed trading data
+                // Update local databases (IndexedDB/Local)
                 const uid = usernameId;
                 if (cloudUser.futures_data) await localDbService.saveUserData(uid, 'futures', cloudUser.futures_data);
                 if (cloudUser.stocks_data) await localDbService.saveUserData(uid, 'stocks', cloudUser.stocks_data);
             } else {
                 console.warn("⚠️ Cloud user NOT found for ID:", usernameId);
-                // IMPORTANT: If we have it locally but NOT in cloud, it was renamed or deleted!
-                if (activeUser) {
-                    console.log("⚠️ Stale local user detected. Checking for rename via email...");
-
-                    // Try to find the user by their email instead
-                    if (activeUser.email) {
-                        const { data: renamedUser } = await supabase
-                            .from('profiles')
-                            .select('*')
-                            .ilike('email', activeUser.email)
-                            .maybeSingle();
-
-                        if (renamedUser && renamedUser.username.toLowerCase() !== usernameId) {
-                            console.log("🔄 User was renamed to:", renamedUser.username);
-                            setError(t('userNotFound'));
-
-                            // Silent Cleanup/Update
-                            delete users[usernameId];
-                            users[renamedUser.username.toLowerCase()] = renamedUser;
-                            localStorage.setItem('smartJournal_users', JSON.stringify(users));
-                            setIsLoading(false);
-                            return;
-                        }
-                    }
-
-                    // If no email match or no email, just purge the stale local user
-                    delete users[usernameId];
-                    localStorage.setItem('smartJournal_users', JSON.stringify(users));
-                    activeUser = null;
-                }
             }
 
             if (!activeUser) {
@@ -386,14 +352,7 @@ const CentralAuth = ({ onLogin, lang: initialLang = 'he' }) => {
             }
 
             const hashedInput = hashPassword(formData.password);
-            console.log("🔑 Password check:", {
-                inputLength: formData.password?.length || 0,
-                isInputEmpty: !formData.password,
-                hashedInput: hashedInput,
-                cloudPasswordHash: activeUser.password,
-                match: hashedInput === activeUser.password
-            });
-
+            
             if (hashedInput !== activeUser.password) {
                 setError(t('wrongPassword'));
                 setIsLoading(false);
@@ -403,6 +362,21 @@ const CentralAuth = ({ onLogin, lang: initialLang = 'he' }) => {
             if (isCloudSynced) {
                 setSuccess(lang === 'he' ? "נתונים סונכרנו מהענן בהצלחה!" : "Cloud data synchronized successfully!");
                 setTimeout(() => setSuccess(''), 3000);
+            } else if (activeUser) {
+                // If we logged in via local data but cloud didn't have it, restore to cloud now!
+                console.log("☁️ Restoring local user to cloud...");
+                try {
+                    // Safe upsert - try to avoid schema conflicts
+                    const profileData = {
+                        username: usernameId,
+                        password: activeUser.password,
+                        metadata: activeUser.metadata || {}
+                    };
+                    await supabase.from('profiles').upsert([profileData]);
+                    console.log("✅ User account restored to cloud successfully!");
+                } catch (restoreErr) {
+                    console.error("❌ Failed to restore user to cloud:", restoreErr.message);
+                }
             }
 
         } catch (e) {
@@ -1299,7 +1273,7 @@ const CentralAuth = ({ onLogin, lang: initialLang = 'he' }) => {
 
 // Journal Selection Component
 const JournalSelection = ({ username, onSelectJournal, onLogout, lang = 'he' }) => {
-    const t = (key) => TRANSLATIONS[lang][key] || key;
+    const t = (key) => TRANSLATIONS[lang]?.[key] || key;
 
     return (
         <div className="min-h-screen bg-slate-900 flex items-center justify-center p-4">
@@ -1402,31 +1376,6 @@ export default function App() {
         }
     }, [selectedJournal]);
 
-    // --- GLOBAL SYNC ORCHESTRATION ---
-    useEffect(() => {
-        if (!user) return;
-
-        // 1. Initial Sync
-        tradeService.syncToCloud(user);
-
-        // 2. Interval Sync (Every 3 minutes)
-        const outboundInterval = setInterval(() => {
-            console.log("⏰ 3-minute heartbeat: Syncing to cloud...");
-            tradeService.syncToCloud(user);
-        }, 3 * 60 * 1000);
-
-        // 3. Sync on Close
-        const handleBeforeUnload = () => {
-            tradeService.syncToCloud(user);
-        };
-        window.addEventListener('beforeunload', handleBeforeUnload);
-
-        return () => {
-            clearInterval(outboundInterval);
-            window.removeEventListener('beforeunload', handleBeforeUnload);
-        };
-    }, [user]);
-
     useEffect(() => {
         const removeSplash = () => {
             const splash = document.getElementById('initial-splash');
@@ -1509,6 +1458,31 @@ export default function App() {
         };
 
         syncColmexFromCloud();
+    }, [user]);
+
+    // --- GLOBAL SYNC ORCHESTRATION ---
+    useEffect(() => {
+        if (!user) return;
+
+        // 1. Initial Sync
+        tradeService.syncToCloud(user);
+
+        // 2. Interval Sync (Every 3 minutes)
+        const outboundInterval = setInterval(() => {
+            console.log("⏰ 3-minute heartbeat: Syncing to cloud...");
+            tradeService.syncToCloud(user);
+        }, 3 * 60 * 1000);
+
+        // 3. Sync on Close
+        const handleBeforeUnload = () => {
+            tradeService.syncToCloud(user);
+        };
+        window.addEventListener('beforeunload', handleBeforeUnload);
+
+        return () => {
+            clearInterval(outboundInterval);
+            window.removeEventListener('beforeunload', handleBeforeUnload);
+        };
     }, [user]);
 
     const handleLogin = (username, journal, language) => {

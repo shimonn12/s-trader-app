@@ -154,11 +154,11 @@ export const excelService = {
                 date: date,
                 time: time,
                 symbol: symbol.toUpperCase(),
-                type: quantity > 0 ? 'Long' : 'Short',
+                type: quantity < 0 ? 'Long' : 'Short', // If closing qty is negative, it was a Long. If positive, it was a Short cover.
                 pnl: pnl,
                 contracts: Math.abs(quantity),
-                entryPrice: tPrice,
-                exitPrice: cPrice,
+                entryPrice: cPrice, // C. Price is Cost (Entry)
+                exitPrice: tPrice,  // T. Price is Trade (Exit)
                 quantity: Math.abs(quantity), // Added for stocks journal compatibility
                 strategy: '-', 
                 notes: '-',
