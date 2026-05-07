@@ -337,10 +337,20 @@ const CentralAuth = ({ onLogin, lang: initialLang = 'he' }) => {
                 users[usernameId] = { ...activeUser };
                 localStorage.setItem('smartJournal_users', JSON.stringify(users));
 
-                // Update local databases (IndexedDB/Local)
+                // Update local databases (IndexedDB/Local) ONLY if they are empty
                 const uid = usernameId;
-                if (cloudUser.futures_data) await localDbService.saveUserData(uid, 'futures', cloudUser.futures_data);
-                if (cloudUser.stocks_data) await localDbService.saveUserData(uid, 'stocks', cloudUser.stocks_data);
+                const localFutures = await localDbService.loadUserData(uid, 'futures');
+                const localStocks = await localDbService.loadUserData(uid, 'stocks');
+
+                if (!localFutures && cloudUser.futures_data) {
+                    console.log("☁️ Local futures empty, downloading from cloud...");
+                    await localDbService.saveUserData(uid, 'futures', cloudUser.futures_data);
+                }
+                
+                if (!localStocks && cloudUser.stocks_data) {
+                    console.log("☁️ Local stocks empty, downloading from cloud...");
+                    await localDbService.saveUserData(uid, 'stocks', cloudUser.stocks_data);
+                }
             } else {
                 console.warn("⚠️ Cloud user NOT found for ID:", usernameId);
             }
